@@ -4,9 +4,12 @@ export class HandDetector {
   private hands: Hands;
 
   constructor(onResults: (results: Results) => void) {
+    console.log('Initializing HandDetector...');
     this.hands = new Hands({
       locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        const url = `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        console.log('Loading MediaPipe file:', url);
+        return url;
       },
     });
 
@@ -29,28 +32,34 @@ export class HandDetector {
 }
 
 export const isFist = (landmarks: any[]) => {
-  // Simple fist detection: check if fingertips are closer to the palm than the middle joints
-  // Landmarks: 8 (index tip), 12 (middle tip), 16 (ring tip), 20 (pinky tip)
-  // Joints: 6 (index pip), 10 (middle pip), 14 (ring pip), 18 (pinky pip)
-  // Palm base: 0 (wrist)
-  
+  // Landmarks: 8, 12, 16, 20 are tips. 5, 9, 13, 17 are MCP (knuckles).
+  // A fist is when tips are very close to MCPs or below them.
   const fingerTips = [8, 12, 16, 20];
-  const fingerPips = [6, 10, 14, 18];
+  const fingerMcps = [5, 9, 13, 17];
   const wrist = landmarks[0];
 
   let closedFingers = 0;
   for (let i = 0; i < fingerTips.length; i++) {
     const tip = landmarks[fingerTips[i]];
-    const pip = landmarks[fingerPips[i]];
+    const mcp = landmarks[fingerMcps[i]];
     
-    // Distance from wrist
-    const distTip = Math.sqrt(Math.pow(tip.x - wrist.x, 2) + Math.pow(tip.y - wrist.y, 2));
-    const distPip = Math.sqrt(Math.pow(pip.x - wrist.x, 2) + Math.pow(pip.y - wrist.y, 2));
-    
-    if (distTip < distPip) {
+    // In MediaPipe, Y increases downwards. 
+    // If tip.y > mcp.y, the finger is likely curled down towards the palm.
+    if (tip.y > mcp.y) {
       closedFingers++;
     }
   }
 
-  return closedFingers >= 3;
+  // Thumb check (landmark 4 is tip, 2 is base)
+  const thumbTip = landmarks[4];
+  const thumbBase = landmarks[2];
+  // If thumb tip is close to the palm (index MCP)
+  const indexMcp = landmarks[5];
+  const distThumbToIndex = Math.sqrt(Math.pow(thumbTip.x - indexMcp.x, 2) + Math.pow(thumbTip.y - indexMcp.y, 2));
+  
+  if (closedFingers >= 3 || (closedFingers >= 2 && distThumbToIndex < 0.1)) {
+    return true;
+  }
+
+  return false;
 };

@@ -16,7 +16,7 @@ interface HandState {
 }
 
 export const HandGame: React.FC<{ onGameOver: (score: number) => void }> = ({ onGameOver }) => {
-  const webcamRef = useRef<Webcam>(null);
+  const webcamRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const detectorRef = useRef<HandDetector | null>(null);
   const [score, setScore] = useState(0);
@@ -29,10 +29,22 @@ export const HandGame: React.FC<{ onGameOver: (score: number) => void }> = ({ on
     'Right': { lastX: 0.5, isOut: false, score: 0, isFist: false }
   });
 
+  const [isDetectorReady, setIsDetectorReady] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+
   const onResults = useCallback((results: Results) => {
+    if (!isDetectorReady) setIsDetectorReady(true);
     if (!canvasRef.current || !webcamRef.current?.video) return;
 
-    const canvasCtx = canvasRef.current.getContext('2d');
+    const video = webcamRef.current.video;
+    const canvas = canvasRef.current;
+    
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+
+    const canvasCtx = canvas.getContext('2d');
     if (!canvasCtx) return;
 
     canvasCtx.save();
@@ -49,19 +61,17 @@ export const HandGame: React.FC<{ onGameOver: (score: number) => void }> = ({ on
         state.isFist = fist;
 
         if (gameState === 'PLAYING' && fist) {
-          // Scoring logic:
-          // Left hand: Away is X < 0.3, Towards is X > 0.5
-          // Right hand: Away is X > 0.7, Towards is X < 0.5
-          // (Assuming mirrored video, so Left hand is on the right side of screen, but MediaPipe labels are usually relative to the person)
-          // Let's just use relative movement from center (0.5)
-          
           const center = 0.5;
           const threshold = 0.15;
 
+          // In mirrored view:
+          // User's Left Hand is on the RIGHT side of the screen (X > 0.5)
+          // Moving AWAY from head means moving FURTHER RIGHT (X increases)
+          // User's Right Hand is on the LEFT side of the screen (X < 0.5)
+          // Moving AWAY from head means moving FURTHER LEFT (X decreases)
+
           if (label === 'Left') {
-             // MediaPipe 'Left' is usually the user's left hand. 
-             // In mirrored view, user's left hand is on the right side of the screen (X > 0.5)
-             // Away from head (center) means moving further right (X increases)
+             // User's Left Hand (on screen right)
              if (!state.isOut && currentX > center + threshold) {
                state.isOut = true;
              } else if (state.isOut && currentX < center + 0.05) {
@@ -69,8 +79,7 @@ export const HandGame: React.FC<{ onGameOver: (score: number) => void }> = ({ on
                setScore(prev => prev + 1);
              }
           } else {
-             // User's right hand is on the left side of the screen (X < 0.5)
-             // Away from head (center) means moving further left (X decreases)
+             // User's Right Hand (on screen left)
              if (!state.isOut && currentX < center - threshold) {
                state.isOut = true;
              } else if (state.isOut && currentX > center - 0.05) {
@@ -101,10 +110,15 @@ export const HandGame: React.FC<{ onGameOver: (score: number) => void }> = ({ on
     detectorRef.current = new HandDetector(onResults);
     
     const interval = setInterval(async () => {
-      if (webcamRef.current?.video && webcamRef.current.video.readyState === 4) {
-        await detectorRef.current?.send(webcamRef.current.video);
+      const video = webcamRef.current?.video;
+      if (video && video.readyState >= 2) { // HAVE_CURRENT_DATA or better
+        try {
+          await detectorRef.current?.send(video);
+        } catch (err) {
+          console.error('Detector error:', err);
+        }
       }
-    }, 50);
+    }, 100); // Slightly slower to be safer
 
     return () => {
       detectorRef.current?.close();
@@ -133,15 +147,66 @@ export const HandGame: React.FC<{ onGameOver: (score: number) => void }> = ({ on
     handStatesRef.current['Right'].isOut = false;
   };
 
+  const onUserMedia = (stream: MediaStream) => {
+    console.log('Webcam started successfully', stream);
+    setCameraError(null);
+  };
+
+  const onUserMediaError = (error: string | DOMException) => {
+    console.error('Webcam error:', error);
+    setCameraError(typeof error === 'string' ? error : error.message);
+  };
+
   return (
-    <div className="relative w-full max-w-4xl mx-auto aspect-video bg-black rounded-2xl overflow-hidden border-4 border-zinc-800 shadow-2xl">
+    <div className="relative w-full max-w-4xl mx-auto aspect-video bg-zinc-900 rounded-2xl overflow-hidden border-4 border-zinc-800 shadow-2xl">
+      {/* Error State */}
+      {cameraError && (
+        <div className="absolute inset-0 bg-zinc-900 flex flex-col items-center justify-center z-50 p-8 text-center">
+          <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mb-4">
+            <Camera size={32} className="text-red-500" />
+          </div>
+          <h3 className="text-xl font-bold text-white mb-2">攝影機權限遭拒絕</h3>
+          <p className="text-zinc-400 mb-6 max-w-xs">
+            請在瀏覽器網址列點擊攝影機圖示允許權限，或點擊右上方「在新分頁開啟」圖示以獲得最佳體驗。
+          </p>
+          <div className="flex gap-3">
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-6 py-2 bg-white text-black font-bold rounded-lg hover:bg-zinc-200 transition-colors"
+            >
+              重新整理
+            </button>
+            <a 
+              href={window.location.href} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="px-6 py-2 bg-zinc-800 text-white font-bold rounded-lg hover:bg-zinc-700 transition-colors"
+            >
+              在新分頁開啟
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* Video Layer - Fully visible */}
       <WebcamAny
         ref={webcamRef}
         mirrored
         audio={false}
+        onUserMedia={onUserMedia}
+        onUserMediaError={onUserMediaError}
         className="absolute inset-0 w-full h-full object-cover"
-        videoConstraints={{ facingMode: 'user' }}
+        videoConstraints={{ 
+          facingMode: 'user' 
+        }}
       />
+      
+      {!isDetectorReady && (
+        <div className="absolute inset-0 bg-zinc-900 flex flex-col items-center justify-center z-50">
+          <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-4" />
+          <p className="text-zinc-400 font-bold animate-pulse">INITIALIZING AI...</p>
+        </div>
+      )}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full pointer-events-none z-10"
