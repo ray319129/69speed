@@ -1,0 +1,6 @@
+{
+  "name": "Hand Gesture Fitness Game",
+  "description": "A game where you use hand gestures to score points by moving your hands back and forth.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": []
+}
